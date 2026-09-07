@@ -111,6 +111,8 @@ def execute(argv, root, env, timeout, shutdown_grace=5):
             counts = []
             browser_version = None
             for line in output:
+                if line.startswith(b'READINESS_DIAGNOSTIC='):
+                    print(line.decode().strip(), flush=True)
                 if line.startswith(b'READINESS_BROWSER='):
                     value = line.split(b'=', 1)[1].decode().strip()
                     if re.fullmatch(r'[0-9.]+', value):

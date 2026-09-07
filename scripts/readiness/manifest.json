@@ -139,7 +139,7 @@
         ],
         "argv": [
           "{python}",
-          "scripts/readiness_tests.py",
+          "scripts/readiness_diagnostic.py",
           "discover"
         ]
       }
