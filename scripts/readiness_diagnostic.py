@@ -1,4 +1,4 @@
-import json, re, sys, unittest
+import json, re, sys, unittest, os
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import tests.test_live_collaboration_acceptance_cli as module
@@ -16,13 +16,12 @@ def observed(*args,**kwargs):
   except (ValueError,KeyError,OSError):print('No structured CLI report',flush=True)
  return result
 module.subprocess.run=observed
-name='test_existing_service_runs_robot_mutations_without_generation_and_cleans_exact_objects'
-for index in range(30):
- result=unittest.TestResult()
- module.LiveCollaborationAcceptanceCliTests(name).run(result)
- print('Probe',index+1,'passed' if result.wasSuccessful() else 'failed',flush=True)
- if not result.wasSuccessful():
-  for _,trace in result.failures+result.errors:
-   print('Failure location:',re.findall(r'line (\d+), in',trace)[-3:])
-   print('Failure assertion:',trace.splitlines()[-1][:400].replace('admin-secret-value','<redacted>'))
-  raise SystemExit(1)
+os.environ['IC_SKIP_PERFORMANCE_TESTS']='1'
+result=unittest.TestResult()
+unittest.defaultTestLoader.discover('tests',top_level_dir='.').run(result)
+print('Suite:',result.testsRun,'failures:',len(result.failures),'errors:',len(result.errors),flush=True)
+for test,trace in result.failures+result.errors:
+ print('Failed test:',test.id())
+ print('Failure location:',re.findall(r'line (\d+), in',trace)[-3:])
+ print('Failure assertion:',trace.splitlines()[-1][:400].replace('admin-secret-value','<redacted>'))
+raise SystemExit(not result.wasSuccessful())
