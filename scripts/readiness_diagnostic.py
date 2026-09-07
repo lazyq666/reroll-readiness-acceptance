@@ -16,5 +16,5 @@ def observed(*args,**kwargs):
   except (ValueError,KeyError,OSError):print('No structured CLI report',flush=True)
  return result
 module.subprocess.run=observed
-import scripts.readiness_tests as runner
+import readiness_tests as runner
 raise SystemExit(runner.main())
