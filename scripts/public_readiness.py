@@ -111,8 +111,6 @@ def execute(argv, root, env, timeout, shutdown_grace=5):
             counts = []
             browser_version = None
             for line in output:
-                if line.startswith(b'READINESS_DIAGNOSTIC='):
-                    print(line.decode().strip(), flush=True)
                 if line.startswith(b'READINESS_BROWSER='):
                     value = line.split(b'=', 1)[1].decode().strip()
                     if re.fullmatch(r'[0-9.]+', value):
@@ -124,7 +122,16 @@ def execute(argv, root, env, timeout, shutdown_grace=5):
                         allowed_reasons = {'controlled performance environment required', 'browser runs in dedicated required group', 'POSIX environment required', 'other optional test; inspect its declared reason'}
                         count['skip_categories'] = {key: int(number) for key, number in value.get('skip_categories', {}).items() if key in allowed_reasons}
                         count['failed_tests'] = [name for name in value.get('failed_tests', []) if isinstance(name, str) and re.fullmatch(r'[A-Za-z_][\w.]*', name)]
-                        count['failure_locations'] = [item for item in value.get('failure_locations', []) if isinstance(item, dict) and set(item) == {'test', 'file', 'line'} and isinstance(item['test'], str) and re.fullmatch(r'[A-Za-z_][\w.]*', item['test']) and isinstance(item['file'], str) and re.fullmatch(r'(?:tests|scripts|backend)/[A-Za-z0-9_./-]+\.py', item['file']) and '..' not in Path(item['file']).parts and isinstance(item['line'], int) and item['line'] > 0]
+                        count['failure_locations'] = [
+                            item for item in value.get('failure_locations', [])
+                            if isinstance(item, dict) and set(item) == {'test', 'file', 'line'}
+                            and isinstance(item['test'], str)
+                            and re.fullmatch(r'[A-Za-z_][\w.]*', item['test'])
+                            and isinstance(item['file'], str)
+                            and re.fullmatch(r'(?:tests|scripts|backend)/[A-Za-z0-9_./-]+\.py', item['file'])
+                            and '..' not in Path(item['file']).parts
+                            and isinstance(item['line'], int) and item['line'] > 0
+                        ]
                         counts.append(count)
                     except (ValueError, KeyError, TypeError):
                         code = 1
