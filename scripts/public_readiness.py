@@ -28,8 +28,11 @@ class ReadinessError(ValueError):
     """A bounded, public-safe operational failure explanation."""
 
 
-def git(root, *args):
-    return subprocess.check_output(['git', '-C', str(root), *args], text=True, stderr=subprocess.PIPE).strip()
+def git(root, *args, env=None):
+    if env is None:
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        env['GIT_NO_REPLACE_OBJECTS'] = '1'
+    return subprocess.check_output(['git', '-C', str(root), *args], text=True, stderr=subprocess.PIPE, env=env).strip()
 
 
 def identity(root, base=None, head=None):
@@ -56,13 +59,13 @@ def clean_environment(scratch):
                XDG_CACHE_HOME=str(scratch / 'cache'),
                PLAYWRIGHT_BROWSERS_PATH=str(scratch / 'browsers'),
                PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1',
-               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_NO_REPLACE_OBJECTS='1',
                PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK='1',
                UV_NO_CONFIG='1', IC_SKIP_PERFORMANCE_TESTS='1',
-               UV_CACHE_DIR=str(Path(tempfile.gettempdir()) / 'reroll-readiness-downloads/uv'),
-               PIP_CACHE_DIR=str(Path(tempfile.gettempdir()) / 'reroll-readiness-downloads/pip'),
-               npm_config_cache=str(Path(tempfile.gettempdir()) / 'reroll-readiness-downloads/npm'),
+               READINESS_DOWNLOAD_CACHE=os.environ.get('READINESS_DOWNLOAD_CACHE', str(Path(tempfile.gettempdir()) / 'reroll-readiness-downloads')),
                CI='1', LANG='en_US.UTF-8')
+    cache = Path(env['READINESS_DOWNLOAD_CACHE'])
+    env.update(UV_CACHE_DIR=str(cache / 'uv'), PIP_CACHE_DIR=str(cache / 'pip'), npm_config_cache=str(cache / 'npm'))
     for key in ('HOME', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME'):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     return env
@@ -118,6 +121,7 @@ def execute(argv, root, env, timeout, shutdown_grace=5):
                         count = {key: int(value[key]) for key in ('tests', 'skipped', 'failures', 'errors')}
                         allowed_reasons = {'controlled performance environment required', 'browser runs in dedicated required group', 'POSIX environment required', 'other optional test; inspect its declared reason'}
                         count['skip_categories'] = {key: int(number) for key, number in value.get('skip_categories', {}).items() if key in allowed_reasons}
+                        count['failed_tests'] = [name for name in value.get('failed_tests', []) if isinstance(name, str) and re.fullmatch(r'[A-Za-z_][\w.]*', name)]
                         counts.append(count)
                     except (ValueError, KeyError, TypeError):
                         code = 1
@@ -135,7 +139,7 @@ def require_history(root, ref='HEAD', check_links=True):
     objects = git(root, 'rev-list', '--objects', '--missing=print', ref)
     if any(line.startswith('?') for line in objects.splitlines()):
         raise ReadinessError('candidate objects are missing; hydrate the partial clone before validation')
-    entries = git(root, 'ls-tree', '-r', ref).splitlines()
+    entries = list(filter(None, git(root, 'ls-tree', '-rz', ref).split('\0')))
     if any(line.startswith('160000 ') for line in entries):
         raise ReadinessError('gitlinks are not supported')
     for line in entries:
@@ -149,7 +153,7 @@ def source_changed(root):
     if git(root, 'diff', 'HEAD', '--'):
         return True
     # --others without exclude-standard deliberately includes ignored source.
-    extra = git(root, 'ls-files', '--others').splitlines()
+    extra = filter(None, git(root, 'ls-files', '--others', '-z').split('\0'))
     return any(not (name.startswith('node_modules/') or
                     ('__pycache__' in Path(name).parts and name.endswith('.pyc')))
                for name in extra)
@@ -191,6 +195,10 @@ def run_group(root, group, base, head=None, timeout=1800):
                         for arg in entry['argv']]
                 check.update(execute(argv, root, env, timeout - (time.monotonic() - started)))
                 check['category'] = ('preparation' if entry['id'] in ('uv', 'install', 'npm-ci', 'chromium-install') else 'validation')
+            if entry['id'] in ('python-suite', 'node-contracts', 'browser-contract', 'knowledge-map', 'cache-versions') and check['result'] == 'success':
+                counts = check.get('counts', [])
+                if not counts or any(c['tests'] <= c['skipped'] for c in counts):
+                    check.update(result='failure', reason='required test execution evidence is empty')
             if source_changed(root):
                 ever_changed = True
                 check.update(result='failure', reason='check changed candidate source')
@@ -215,10 +223,11 @@ def materialize(source, sha, base=None, head=None):
     with tempfile.TemporaryDirectory(prefix='readiness-snapshot-') as temp:
         root = Path(temp) / 'source'
         root.mkdir()
-        git(root, 'init', '-q')
+        env = clean_environment(Path(temp) / 'git-state')
+        git(root, 'init', '-q', env=env)
         for commit in dict.fromkeys(filter(None, (sha, base, head))):
-            git(root, '-c', 'protocol.file.allow=always', 'fetch', '--no-tags', str(source), commit)
-        git(root, 'checkout', '--detach', sha)
+            git(root, '-c', 'protocol.file.allow=always', 'fetch', '--no-tags', str(source), commit, env=env)
+        git(root, '-c', 'core.autocrlf=false', 'checkout', '--detach', sha, env=env)
         require_history(root)
         yield root
 
@@ -258,6 +267,7 @@ def snapshot(source, ref, base, output):
                 if result['result'] != 'success':
                     report['result'] = 'failure'
                 reports.append(report)
+                output.write_text(json.dumps({'schema_version': SCHEMA, **expected, 'result': 'in_progress', 'groups': reports}, indent=2) + '\n')
                 print(f"{group}: {report['result']}", flush=True)
     report = {'schema_version': SCHEMA, **expected, 'local_changes_excluded': dirty, 'groups': reports,
               'result': 'success' if aggregate(reports, expected) else 'failure'}
