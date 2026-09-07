@@ -79,9 +79,6 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
-      - name: Synthetic post-merge failure
-        if: ${{ github.event_name == 'push' }}
-        run: exit 1
       - name: Run shared python-tests inventory
         run: python scripts/public_readiness.py group python-tests --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/python-tests.json"
       - name: Preserve metadata even after failure
